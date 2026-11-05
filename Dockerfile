@@ -23,6 +23,16 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 
+# migrate 要在 VPC 內跑（本機 5432 被封，連不上 RDS）：
+#   aws ecs execute-command --cluster lucaaws --task <taskArn> --container lucaaws --command "node scripts/migrate.js"
+# 所以 scripts/ 與 schema.sql 也要進 runtime 鏡像
+COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/schema.sql ./schema.sql
+
+# package.json 再複製一次：standalone 內的 package.json 可能不含 "type": "module"，
+# 而 scripts/migrate.js 是 ESM（import），缺 type 就會被當成 CJS 而報錯
+COPY --from=build /app/package.json ./package.json
+
 EXPOSE 3000
 
 # ECS task definition 的 containerHealthCheck 會用這個；本地 docker run 也能看到狀態

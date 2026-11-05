@@ -1,4 +1,4 @@
-# bootstrap.ps1 — 只跑一次：把 AWS 端資源建起來，之後每次部署只用 deploy.ps1
+﻿# bootstrap.ps1 — 只跑一次：把 AWS 端資源建起來，之後每次部署只用 deploy.ps1
 #
 # 建立：ECR repository、CloudWatch log group、兩個 IAM role、ALB + target group + listener、
 #       ECS cluster、第一版 task definition、ECS service
@@ -19,7 +19,8 @@ if (-not (Get-Command aws -ErrorAction SilentlyContinue))    { throw '找不到 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw '找不到 docker（deploy.ps1 需要 Docker）' }
 
 $acct  = (AWS 'sts' @('get-caller-identity')).Account
-$state = [pscustomobject]@{ region = $Region; project = $Project; account = $acct }
+$state = New-State          # create-rds.ps1 可能已經寫了 vpcId / taskSgId，沿用不覆蓋
+$state | Add-Member account $acct -Force
 Write-Host "帳號 $acct / 區域 $Region / 專案 $Project"
 
 Write-Host '=== 1) VPC（RDS 必須與 ECS 同一個 VPC）==='
@@ -65,8 +66,16 @@ $state | Add-Member taskRoleArn      (Ensure-Role "$Project-task")      -Force
 try { AWS 'iam' @('attach-role-policy', '--role-name', "$Project-execution", '--policy-arn', 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy') | Out-Null }
 catch { Write-Host '（policy 已 attach，略過）' }
 
-# task role：app 自己用到的權限（讀 Secrets Manager / SSM）
-$secretPolicy = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue","ssm:GetParameter"],"Resource":"*"}]}'
+# task role：app 自己用到的權限（讀 Secrets Manager / SSM）+ `aws ecs execute-command` 需要的 ssmmessages
+$secretPolicy = @'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["secretsmanager:GetSecretValue", "ssm:GetParameter"], "Resource": "*" },
+    { "Effect": "Allow", "Action": ["ssm:ListCommands", "ssm:SendCommand", "ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"], "Resource": "*" }
+  ]
+}
+'@
 try { AWS 'iam' @('put-role-policy', '--role-name', "$Project-task", '--policy-name', "$Project-app", '--policy-document', $secretPolicy) | Out-Null }
 catch { Write-Host '（role policy 已存在，略過）' }
 
@@ -131,6 +140,9 @@ if ($arns) { $svc = (AWS 'ecs' @('describe-services', '--cluster', $Project, '--
 
 if (-not $svc) {
     $subnetStr = ($subnets -join ',')
+    # create-rds.ps1 有建 task SG 就用它（RDS 的 5432 只放行來自這個 SG）；否則用 VPC 的 default SG
+    $sgStr = if ($state.taskSgId) { $state.taskSgId } else { (AWS 'ec2' @('describe-security-groups', '--filters', "Name=vpc-id,Values=$($state.vpcId)", 'Name=group-name,Values=default')).SecurityGroups[0].GroupId }
+    $state | Add-Member taskSgId $sgStr -Force
     $svc = (AWS 'ecs' @('create-service', '--cluster', $Project, '--service-name', $Project,
         '--task-definition', $td.taskDefinitionArn,
         '--launch-type', 'FARGATE',
@@ -138,8 +150,9 @@ if (-not $svc) {
         '--desired-count', '1',
         '--network-mode', 'awsvpc',
         '--load-balancers', "targetGroupArn=$tgArn",
-        '--network', "awsvpcConfiguration={subnets=[$subnetStr],assignPublicIp=ENABLED}")).services[0]
-    Write-Host "建立 service: $($svc.serviceName)"
+        '--enable-execute-command',
+        '--network', "awsvpcConfiguration={subnets=[$subnetStr],securityGroups=[$sgStr],assignPublicIp=ENABLED}")).services[0]
+    Write-Host "建立 service: $($svc.serviceName)（SG: $sgStr）"
 }
 
 $state | Add-Member cluster    $cluster.clusterName -Force

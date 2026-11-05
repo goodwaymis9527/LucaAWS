@@ -1,4 +1,4 @@
-# deploy.ps1 — 一鍵部署：build → docker build → push ECR → 註冊新的 task definition revision → 更新 service
+﻿# deploy.ps1 — 一鍵部署：build → docker build → push ECR → 註冊新的 task definition revision → 更新 service
 #
 # 第一次要先跑 bootstrap.ps1（建立 ECR/cluster/service 並產生 .aws-state/config.json）。
 # 之後每次改程式碼，只要：

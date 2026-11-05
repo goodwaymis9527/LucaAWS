@@ -1,4 +1,4 @@
-# aws-common.ps1 — bootstrap.ps1 與 deploy.ps1 共用；兩個腳本都 dot-source 這檔
+﻿# aws-common.ps1 — bootstrap.ps1 與 deploy.ps1 共用；兩個腳本都 dot-source 這檔
 # 依賴：AWS CLI v2（PowerShell 內直接用 `aws`，JSON 輸出）
 
 $ErrorActionPreference = 'Stop'
@@ -26,8 +26,15 @@ function Ensure-StateDir {
 
 function Load-State {
     Ensure-StateDir
-    if (-not (Test-Path $StateFile)) { throw '.aws-state/config.json 不存在。先跑一次 bootstrap.ps1' }
+    if (-not (Test-Path $StateFile)) { throw '.aws-state/config.json 不存在。先跑一次 bootstrap.ps1（或 aws/create-rds.ps1）' }
     return Get-Content $StateFile -Raw | ConvertFrom-Json
+}
+
+# bootstrap 用的：檔存在就沿用（create-rds.ps1 可能已經寫了 vpcId / taskSgId），不存在就新建
+function New-State {
+    Ensure-StateDir
+    if (Test-Path $StateFile) { return Get-Content $StateFile -Raw | ConvertFrom-Json }
+    return [pscustomobject]@{ region = $Region; project = $Project }
 }
 
 function Save-State($state) {

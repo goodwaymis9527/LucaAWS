@@ -16,6 +16,8 @@ LucaAWS\
   buildspec.yml         可选：走 CodePipeline 自動部署
   bootstrap.ps1         只跑一次，把 AWS 資源建起來
   deploy.ps1            一鍵部署：build → push ECR → 新 revision → update-service
+  aws\create-rds.ps1    一次性：建 RDS + 兩個 SG（RDS 只放行來自 task SG 的 5432）
+  aws\set-db-secret.ps1 把 DATABASE_URL 放 Secrets Manager，dbSecretArn 寫進 config.json
   schema.sql            items 表
   scripts\migrate.js    套 schema（DB_DRIVER 切換 pg / neon）
   lib\db.js             統一 query(text, params)，dev=Neon、prod=RDS
@@ -47,8 +49,12 @@ npm run db:migrate               # 套 schema
 ### 一次性的準備
 
 1. `aws configure`（AWS CLI v2），區域 `ap-southeast-2`。
-2. RDS PostgreSQL 建在 **default VPC**（與 ECS 同一個 VPC），SG 放行 5432。
-3. `DATABASE_URL` 放 Secrets Manager（建議），把 secret ARN 寫進 `.aws-state/config.json` 的 `dbSecretArn`。
+2. RDS PostgreSQL 建在 **default VPC**（與 ECS 同一個 VPC），SG 放行 5432。可用 `aws/create-rds.ps1` 一次做完（含 DB subnet group 與兩個 SG）。
+3. `DATABASE_URL` 放 Secrets Manager（`aws/set-db-secret.ps1`），把 secret ARN 寫進 `.aws-state/config.json` 的 `dbSecretArn`。
+
+   本機 5432 被封且 RDS 是 private，所以 `npm run db:migrate` 在本機連不上；要在 VPC 內跑：
+   `aws ecs execute-command --cluster lucaaws --task <taskArn> --container lucaaws --command "node scripts/migrate.js" --interactive`
+   （Dockerfile 已把 `scripts/` 與 `schema.sql` 進鏡像，service 開了 `--enable-execute-command`。）
 4. 跑：
 
 ```powershell
@@ -92,3 +98,5 @@ aws --region ap-southeast-2 ecs describe-events --cluster lucaaws
 - ECS 的 task definition 建議用 Secrets Manager（`dbSecretArn`），不要把含密碼的 URL 寫成明文 environment。
 - Fargate 任務與 RDS 必須同一 VPC；跨 VPC 或從本機連 RDS 會被 SG / 網路封鎖。
 - 本地 5432 被封，所以 RDS 只能從 VPC 內（ECS、Lambda、或跳板）連；本機要測得靠 Neon 或 SSH 隧道。
+- `.ps1` 檔要存成 **UTF-8 with BOM**：PowerShell 5.1 讀沒 BOM 的 UTF-8 會把中文當成 ANSI，字串亂掉甚至解析失敗
+  （`gitGithubPush.bat` 則相反：它需要 CRLF，靠 `chcp 65001` 顯示中文）。
