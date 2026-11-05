@@ -6,10 +6,13 @@
 //   3) 建 RDS instance（private，不公開存取）
 //   4) 把 rdsEndpoint / SG id 寫進 .aws-state/config.json
 //
-// 執行（密碼走環境變數或 --password，不要寫死在檔內）：
+// 執行（密碼走環境變數、--password，或 --password-file；不要寫死在檔內）：
 //   $env:RDS_PASSWORD = '你的密碼'
 //   node aws/rds.js
+//   node aws/rds.js --password-file=C:\Users\g01943\secrets\rds.txt
 //   node aws/rds.js --instance-class=db.t4g.micro --storage=20
+
+import { readFileSync } from 'node:fs';
 
 import {
   EC2Client,
@@ -37,12 +40,15 @@ const opt = (name, dflt) => {
 
 const dbName = opt('dbname', 'lucaaws');
 const user = opt('user', 'luca');
-const password = opt('password', process.env.RDS_PASSWORD);
+const passwordFile = opt('password-file');
+// 三種傳法：--password= / $env:RDS_PASSWORD / --password-file=（檔案內容只有密碼一行）
+const password = opt('password') || process.env.RDS_PASSWORD ||
+  (passwordFile ? readFileSync(passwordFile, 'utf8').trim() : null);
 const instanceClass = opt('instance-class', 'db.t4g.micro');
 const storage = Number(opt('storage', 20));
 
 if (!password) {
-  throw new Error('請用 $env:RDS_PASSWORD 或 --password= 傳入密碼（這個值不會寫進倉庫）');
+  throw new Error('請用 $env:RDS_PASSWORD、--password= 或 --password-file= 傳入密碼（這個值不會寫進倉庫）');
 }
 
 const ec2 = new EC2Client({ region: REGION });
