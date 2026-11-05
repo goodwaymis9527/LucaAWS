@@ -13,7 +13,12 @@ import { IAMClient, AttachRolePolicyCommand, CreateRoleCommand, GetRoleCommand, 
 import {
   EC2Client,
   AuthorizeSecurityGroupIngressCommand,
+  AttachInternetGatewayCommand,
+  CreateInternetGatewayCommand,
+  CreateRouteCommand,
   CreateSecurityGroupCommand,
+  DescribeInternetGatewaysCommand,
+  DescribeRouteTablesCommand,
   DescribeSecurityGroupsCommand,
   DescribeSubnetsCommand,
   DescribeVpcsCommand,
@@ -37,7 +42,7 @@ import {
   RegisterTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
 
-import { REGION, PROJECT, buildTaskDefinition, isErrType, newState, saveState, whoami } from './aws-common.js';
+import { REGION, PROJECT, arn, buildTaskDefinition, isErrType, newState, saveState, whoami } from './aws-common.js';
 
 const clientOpts = { region: REGION };
 const ecr = new ECRClient(clientOpts);
@@ -67,6 +72,38 @@ state.vpcId = vpc.VpcId;
 state.vpcCidr = vpc.CidrBlock;
 state.subnets = subnets;
 console.log(`VPC ${vpc.VpcId}  ${vpc.CidrBlock}  subnet 數=${subnets.length}`);
+
+// 這台帳號的 default VPC 沒有 IGW（或被 detach）。沒有 IGW 就沒有 internet 路由：
+// 外部連不進 ALB，task 也連不出去 Neon（Neon 在 AWS 之外，一定要走 IGW）。
+async function ensureInternetRoute() {
+  const igws = (await ec2.send(new DescribeInternetGatewaysCommand({}))).InternetGateways || [];
+  let igw = igws.find((g) => (g.Attachment || []).some((a) => a.VpcId === vpc.VpcId));
+  if (!igw) {
+    igw = igws[0] || (await ec2.send(new CreateInternetGatewayCommand({}))).InternetGateway;
+    await ec2.send(new AttachInternetGatewayCommand({ InternetGatewayId: igw.InternetGatewayId, VpcId: vpc.VpcId }));
+    console.log(`attach IGW: ${igw.InternetGatewayId} → ${vpc.VpcId}`);
+  } else {
+    console.log(`IGW ${igw.InternetGatewayId} 已 attach 到 ${vpc.VpcId}`);
+  }
+
+  const tables = (await ec2.send(new DescribeRouteTablesCommand({ Filters: [{ Name: 'vpc-id', Values: [vpc.VpcId] }] }))).RouteTables || [];
+  const table = tables.find((t) => t.Default) || tables[0];
+  if (!table) throw new Error(`找不到 ${vpc.VpcId} 的 route table`);
+  const igwId = igw.InternetGatewayId;
+  if ((table.Routes || []).some((r) => r.GatewayId === igwId)) {
+    console.log(`route table ${table.RouteTableId} 已有 0.0.0.0/0 → ${igwId}`);
+  } else {
+    await ec2.send(new CreateRouteCommand({ RouteTableId: table.RouteTableId, DestinationCidrBlock: '0.0.0.0/0', GatewayId: igwId }));
+    console.log(`route table ${table.RouteTableId} 加上 0.0.0.0/0 → ${igwId}`);
+  }
+  state.igwId = igwId;
+  state.routeTableId = table.RouteTableId;
+}
+await ensureInternetRoute();
+
+const publicSubnets = (await ec2.send(new DescribeSubnetsCommand({ Filters: [{ Name: 'vpc-id', Values: [vpc.VpcId] }] }))).Subnets
+  .filter((s) => s.MapPublicIpOnLaunch).map((s) => s.SubnetId);
+if (!publicSubnets.length) console.log('警告：VPC 內沒有 mapPublicIpOnLaunch=true 的 subnet，task 拿不到.public IP，連外部服務（Neon）會失敗');
 
 console.log('=== 2) ECR ===');
 // DescribeRepositories 帶 repositoryNames 時，不存在會直接拋 RepositoryNotFoundException（不會回空清單）
@@ -125,6 +162,24 @@ await iam.send(new AttachRolePolicyCommand({
   RoleName: execRoleName,
   PolicyArn: 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy',
 }));
+
+// 執行角色也要有 Secrets Manager 讀取權限：task definition 的 secrets[] 是「執行角色」取的，
+// 不是 task role。AmazonECSTaskExecutionRolePolicy 只有 ECR pull 與 logs，不含 secrets，
+// 所以任務會卡在 ResourceInitializationError: unable to retrieve secret from asm。
+const execSecretPolicy = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Effect: 'Allow',
+    Action: ['secretsmanager:GetSecretValue', 'ssm:GetParameters'],
+    Resource: [arn('secretsmanager', `secret:${PROJECT}/database*`, state.account), arn('ssm', 'parameter/*', state.account)],
+  }],
+});
+await iam.send(new PutRolePolicyCommand({
+  RoleName: execRoleName,
+  PolicyName: `${PROJECT}-secret-read`,
+  PolicyDocument: execSecretPolicy,
+}));
+console.log('執行角色加入 secret 讀取權限（secrets[] 由執行角色取，不是 task role）');
 
 // task role：讀 Secrets Manager / SSM，外加 ecs execute-command 需要的 ssmmessages
 const appPolicy = JSON.stringify({
