@@ -19,7 +19,7 @@ import {
   ListSecretsCommand,
   PutSecretValueCommand,
 } from '@aws-sdk/client-secrets-manager';
-import { REGION, PROJECT, newState, saveState } from './aws-common.js';
+import { REGION, PROJECT, ACCOUNT, arn, newState, saveState, whoami } from './aws-common.js';
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -33,6 +33,7 @@ let databaseUrl = opt('url');
 
 const sm = new SecretsManagerClient({ region: REGION });
 const state = newState();
+state.account = await whoami();
 
 if (!databaseUrl) {
   if (fromFile) {
@@ -53,13 +54,17 @@ if (!/^postgres(ql)?:\/\//.test(databaseUrl)) {
 
 const host = new URL(databaseUrl).hostname;
 console.log(`將寫入 secret: ${secretName}`);
+console.log(`期望的 ARN: ${arn('secretsmanager', secretName, state.account)}`);
 console.log(`connection string host: ${host}`);   // 只印 host，不印密碼
 
 const existing = ((await sm.send(new ListSecretsCommand({}))).SecretsList || []).find((s) => s.Name === secretName);
 
-let arn;
+let secretArn;
 if (existing) {
-  arn = existing.ARN;
+  secretArn = existing.ARN;
+  if (!secretArn.includes(`:${state.account || ACCOUNT}:`)) {
+    console.log(`注意：既有 secret 屬於另一個帳號（${secretArn}）`);
+  }
   await sm.send(new PutSecretValueCommand({ SecretId: secretName, SecretString: databaseUrl }));
   console.log('更新既有 secret 的值');
 } else {
@@ -68,11 +73,11 @@ if (existing) {
     Description: 'lucaaws DATABASE_URL',
     SecretString: databaseUrl,
   }));
-  arn = created.ARN;
-  console.log(`建立 secret: ${arn}`);
+  secretArn = created.ARN;
+  console.log(`建立 secret: ${secretArn}`);
 }
 
-state.dbSecretArn = arn;
+state.dbSecretArn = secretArn;
 saveState(state);
 
 console.log('');

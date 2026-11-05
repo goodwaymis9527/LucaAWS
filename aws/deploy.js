@@ -9,7 +9,7 @@
 //   node aws/deploy.js --tag=dev
 
 import { spawnSync } from 'node:child_process';
-import { REGION, projectRoot, buildTaskDefinition, readState, saveState } from './aws-common.js';
+import { REGION, projectRoot, buildTaskDefinition, readState, saveState, whoami } from './aws-common.js';
 import { ECRClient, GetAuthorizationTokenCommand } from '@aws-sdk/client-ecr';
 import { ECSClient, RegisterTaskDefinitionCommand, UpdateServiceCommand } from '@aws-sdk/client-ecs';
 
@@ -25,6 +25,9 @@ if (!state.service) throw new Error('config.json 缺少 service；先跑 aws/boo
 const region = state.region || REGION;
 const ecr = new ECRClient({ region });
 const ecs = new ECSClient({ region });
+
+// 先確認憑據（跑 docker build 之前就能發現 key 不對）
+state.account = await whoami();
 
 // Windows 上 npm 是 npm.cmd，所以要 shell:true；docker 是 docker.exe，argv 直接傳比較安全
 function run(cmd, args, useShell = false) {

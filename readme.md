@@ -54,7 +54,7 @@ npm run db:migrate               # 套 schema
 
 ### 一次性的準備
 
-1. **不需要裝 AWS CLI**。SDK 自己找憑據，順序是：
+1. **不需要裝 AWS CLI**。SDK 自己找憑據（`@aws-sdk/client-sts` 的 `GetCallerIdentity` 會印出帳號並與 `aws/aws-common.js` 的 `ACCOUNT`（`927678863269`）比對，不一致只警告、不會自動改設定），順序是：
    `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 環境變數 → `C:\Users\g01943\.aws\credentials`（ini）。
    本機 `.aws` 目前是空的，要先建 `C:\Users\g01943\.aws\credentials`：
 
@@ -79,6 +79,20 @@ npm run db:migrate               # 套 schema
    ```
 
    也可以用 npm scripts：`npm run aws:rds`、`npm run aws:bootstrap`、`npm run aws:secret`、`npm run deploy`、`npm run aws:status`。
+
+`.aws-state/config.json` 的欄位（谁寫、誰用）：
+
+| 欄位 | 由哪個腳本寫 | 誰會用 |
+|---|---|---|
+| `account` | 各腳本（預設 `927678863269`，`LUCAAWS_ACCOUNT` 可覆蓋） | `arn()` 印 ARN、印狀態 |
+| `region` `project` | 各腳本 | 全部 |
+| `vpcId` `vpcCidr` `subnets` | `rds.js` / `bootstrap.js` | bootstrap 建 ALB、service 的 subnets |
+| `taskSgId` `rdsSgId` | `rds.js` / `bootstrap.js` | service 的 networkConfiguration |
+| `rdsEndpoint` `rdsUser` `rdsDbName` | `rds.js` | `secret.js` 組 URI |
+| `dbSecretArn` | `secret.js` | `deploy.js` 寫進 task definition 的 `secrets` |
+| `ecrUri` `executionRoleArn` `taskRoleArn` `logGroup` | `bootstrap.js` | deploy / status |
+| `albArn` `albDns` `targetGroupArn` `cluster` `service` | `bootstrap.js` | deploy / status |
+| `taskFamily` `taskRevision` `lastImage` `lastDeploymentAt` | `bootstrap.js` / `deploy.js` | status |
 
 ### 之後每次部署（一鍵）
 

@@ -27,7 +27,7 @@ import {
   DescribeDBSubnetGroupsCommand,
 } from '@aws-sdk/client-rds';
 
-import { REGION, PROJECT, newState, saveState } from './aws-common.js';
+import { REGION, PROJECT, arn, newState, saveState, whoami } from './aws-common.js';
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -48,6 +48,7 @@ if (!password) {
 const ec2 = new EC2Client({ region: REGION });
 const rds = new RDSClient({ region: REGION });
 const state = newState();
+state.account = await whoami();
 
 console.log('=== 1) VPC / subnets / DB subnet group ===');
 const vpc = ((await ec2.send(new DescribeVpcsCommand({ Filters: [{ Name: 'isDefault', Values: ['true'] }] }))).Vpcs || [])[0];
@@ -143,4 +144,4 @@ state.rdsUser = inst.MasterUsername || user;
 saveState(state);
 console.log('');
 console.log(`endpoint: ${state.rdsEndpoint || '（尚未 available，稍後再看）'}`);
-console.log('下一步：node aws/secret.js');
+console.log(`下一步：node aws/secret.js（secret 會建立成 ${arn('secretsmanager', `${state.project}/database`)}）`);

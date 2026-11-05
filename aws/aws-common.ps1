@@ -5,6 +5,14 @@ $ErrorActionPreference = 'Stop'
 
 $Region     = 'ap-southeast-2'
 $Project    = 'lucaaws'
+$Account    = '927678863269'   # 只是 guard：腳本實際帳號來自 aws sts get-caller-identity
+
+function Arn {
+    param([string]$kind, [string]$resource, [string]$override)
+    # 注意：PowerShell 變數名稱大小寫不分，param 裡的 $account 會蓋掉 $Account，所以這裡用 $override / $script:Account
+    $acct = if ($override) { $override } elseif ($env:LUCAAWS_ACCOUNT) { $env:LUCAAWS_ACCOUNT } else { $script:Account }
+    return "arn:aws:${kind}:${Region}:${acct}:${resource}"
+}
 
 # aws-common.ps1 在 LucaAWS\aws\ 內；專案根是它上一層，.aws-state 放在專案根
 $ProjectRoot = Split-Path -Parent $PSScriptRoot

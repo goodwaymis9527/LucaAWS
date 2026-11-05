@@ -39,6 +39,7 @@ if ($DatabaseUrl -notmatch '^postgres(ql)?://') {
 }
 
 Write-Host "將寫入 secret: $SecretName"
+Write-Host "期望的 ARN: $(Arn 'secretsmanager' $SecretName $state.account)"
 $u = [System.Uri]$DatabaseUrl
 Write-Host "connection string host: $($u.HostName)"   # 只印 host，不印密碼
 

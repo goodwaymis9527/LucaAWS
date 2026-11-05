@@ -22,6 +22,9 @@ $acct  = (AWS 'sts' @('get-caller-identity')).Account
 $state = New-State          # create-rds.ps1 可能已經寫了 vpcId / taskSgId，沿用不覆蓋
 $state | Add-Member account $acct -Force
 Write-Host "帳號 $acct / 區域 $Region / 專案 $Project"
+if ($acct -ne $Account) {
+    Write-Host "注意：憑據屬於帳號 $acct，腳本預設 Account = $Account（要改 aws-common.ps1 的 `$Account，或設環境變數 LUCAAWS_ACCOUNT）"
+}
 
 Write-Host '=== 1) VPC（RDS 必須與 ECS 同一個 VPC）==='
 $vpc = (AWS 'ec2' @('describe-vpcs', '--filters', 'Name=isDefault,Values=true')).Vpcs | Select-Object -First 1

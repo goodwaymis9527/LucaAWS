@@ -16,7 +16,7 @@ import {
   DescribeLogStreamsCommand,
   GetLogEventsCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
-import { REGION, PROJECT, readState } from './aws-common.js';
+import { REGION, PROJECT, ACCOUNT, readState, whoami } from './aws-common.js';
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -30,6 +30,8 @@ const state = readState();
 const ecs = new ECSClient({ region });
 const logs = new CloudWatchLogsClient({ region });
 
+state.account = await whoami();
+
 const svc = ((await ecs.send(new DescribeServicesCommand({
   cluster: state.cluster,
   services: [state.service],
@@ -38,6 +40,7 @@ const svc = ((await ecs.send(new DescribeServicesCommand({
 if (!svc) throw new Error(`找不到 service：${state.service}`);
 
 console.log('=== service ===');
+console.log(`account        : ${state.account || ACCOUNT}`);
 console.log(`taskDefinition : ${svc.taskDefinition}`);
 console.log(`desired/running: ${svc.desiredCount} / ${svc.runningCount}`);
 console.log(`deployments    : ${svc.deployments.length}（active = ${svc.deployments.filter((d) => d.status === 'ACTIVE').length}）`);

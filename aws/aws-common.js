@@ -9,13 +9,17 @@
 //   aws_access_key_id = ...
 //   aws_secret_access_key = ...
 //   region = ap-southeast-2
+//
+// 帳號預設 927678863269（可用環境變數 LUCAAWS_ACCOUNT 覆蓋）；whoami() 每次會比對憑據與這個預設值。
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 
 export const REGION = 'ap-southeast-2';
 export const PROJECT = 'lucaaws';
+export const ACCOUNT = '927678863269';   // 腳本預設的帳號；whoami() 會拿來比對憑據
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -30,8 +34,32 @@ function ensureStateDir() {
 
 export function newState() {
   ensureStateDir();
-  if (existsSync(stateFile)) return readState();
-  return { region: REGION, project: PROJECT };
+  if (existsSync(stateFile)) {
+    const s = readStateRaw();
+    if (!s.account) s.account = ACCOUNT;
+    return s;
+  }
+  return { region: REGION, project: PROJECT, account: ACCOUNT };
+}
+
+// 印完整 ARN 用的固定前缀（arn:aws:kind:region:account:resource）
+export function arn(kind, resource, account) {
+  const acct = account || process.env.LUCAAWS_ACCOUNT || ACCOUNT;
+  return `arn:aws:${kind}:${REGION}:${acct}:${resource}`;
+}
+
+// 用 STS 確認跑腳本的身分屬於哪個帳號。不一致只警告，不自動改設定。
+export async function whoami() {
+  const id = await new STSClient({ region: REGION }).send(new GetCallerIdentityCommand({}));
+  if (id.Account !== ACCOUNT) {
+    console.log(`注意：憑據屬於帳號 ${id.Account}，腳本預設 ACCOUNT = ${ACCOUNT}`);
+    console.log(`      要改預設值請編輯 aws/aws-common.js（或設環境變數 LUCAAWS_ACCOUNT）`);
+    console.log(`      userId: ${id.UserId}`);
+  } else {
+    console.log(`憑據帳號 ${id.Account} / 區域 ${REGION} / 專案 ${PROJECT}`);
+    console.log(`      userId: ${id.UserId}`);
+  }
+  return id.Account;
 }
 
 export function readState() {

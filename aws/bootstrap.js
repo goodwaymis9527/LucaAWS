@@ -37,7 +37,7 @@ import {
   RegisterTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
 
-import { REGION, PROJECT, buildTaskDefinition, newState, saveState } from './aws-common.js';
+import { REGION, PROJECT, buildTaskDefinition, newState, saveState, whoami } from './aws-common.js';
 
 const clientOpts = { region: REGION };
 const ecr = new ECRClient(clientOpts);
@@ -50,6 +50,7 @@ const ecs = new ECSClient(clientOpts);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const state = newState();
+state.account = await whoami();
 
 console.log('=== 1) VPC / subnets ===');
 const vpc = ((await ec2.send(new DescribeVpcsCommand({ Filters: [{ Name: 'isDefault', Values: ['true'] }] }))).Vpcs || [])[0];
