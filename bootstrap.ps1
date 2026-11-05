@@ -40,7 +40,7 @@ Write-Host '=== 2) ECR ==='
 $repo = (AWS 'ecr' @('describe-repositories', '--repository-names', $Project)).repositories | Select-Object -First 1
 if (-not $repo) {
     $repo = (AWS 'ecr' @('create-repository', '--repository-name', $Project,
-        '--image-tag-mutability', 'SIMPLIFIED',
+        '--image-tag-mutability', 'MUTABLE',   # 'SIMPLIFIED' 已被淘汰；要反覆 push latest 必須 MUTABLE
         '--image-scanning-configuration', 'scanOnPush=true')).repository
     Write-Host "建立 ECR: $($repo.repositoryUri)"
 }

@@ -86,13 +86,23 @@ if (!snGroup) {
 
 console.log('=== 2) Security groups ===');
 async function ensureSg(name, description) {
-  const existing = (await ec2.send(new DescribeSecurityGroupsCommand({
+  const find = async () => ((await ec2.send(new DescribeSecurityGroupsCommand({
     Filters: [{ Name: 'vpc-id', Values: [vpc.VpcId] }, { Name: 'group-name', Values: [name] }],
-  })).SecurityGroups || [])[0];
+  }))).SecurityGroups || [])[0];
+  const existing = await find();
   if (existing) return existing.GroupId;
-  const created = await ec2.send(new CreateSecurityGroupCommand({ GroupName: name, Description: description, VpcId: vpc.VpcId }));
-  console.log(`建立 SG: ${name}`);
-  return created.GroupId;
+  try {
+    const created = await ec2.send(new CreateSecurityGroupCommand({ GroupName: name, Description: description, VpcId: vpc.VpcId }));
+    console.log(`建立 SG: ${name}`);
+    return created.GroupId;
+  } catch (err) {
+    // describe 讀寫一致性：剛建好的 SG 可能查不到，但 create 會說 duplicate
+    if (!isErrType(err, 'InvalidGroup.Duplicate')) throw err;
+    const again = await find();
+    if (!again) throw err;
+    console.log(`SG 已存在（describe 沒查到，改用 create 例外後重查）: ${name}`);
+    return again.GroupId;
+  }
 }
 
 const taskSg = await ensureSg(`${state.project}-task`, 'ECS Fargate task ENI');

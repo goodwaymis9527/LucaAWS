@@ -80,7 +80,7 @@ try {
 if (!repo) {
   repo = ((await ecr.send(new CreateRepositoryCommand({
     repositoryName: PROJECT,
-    imageTagMutability: 'SIMPLIFIED',
+    imageTagMutability: 'MUTABLE',   // 'SIMPLIFIED' 已被淘汰（現在的 enum 是 MUTABLE/IMMUTABLE/...）；要用 latest 反覆 push 必須是可覆蓋的 MUTABLE
     imageScanningConfiguration: { scanOnPush: true },
   }))).repository);
   console.log(`建立 ECR: ${repo.repositoryUri}`);
@@ -146,13 +146,23 @@ await iam.send(new PutRolePolicyCommand({ RoleName: taskRoleName, PolicyName: `$
 
 console.log('=== 5) task security group（RDS 的 5432 會指到這個 SG）===');
 async function ensureSg(name, description) {
-  const existing = (await ec2.send(new DescribeSecurityGroupsCommand({
+  const find = async () => ((await ec2.send(new DescribeSecurityGroupsCommand({
     Filters: [{ Name: 'vpc-id', Values: [vpc.VpcId] }, { Name: 'group-name', Values: [name] }],
-  })).SecurityGroups || [])[0];
+  }))).SecurityGroups || [])[0];
+  const existing = await find();
   if (existing) return existing.GroupId;
-  const created = await ec2.send(new CreateSecurityGroupCommand({ GroupName: name, Description: description, VpcId: vpc.VpcId }));
-  console.log(`建立 SG: ${name}`);
-  return created.GroupId;
+  try {
+    const created = await ec2.send(new CreateSecurityGroupCommand({ GroupName: name, Description: description, VpcId: vpc.VpcId }));
+    console.log(`建立 SG: ${name}`);
+    return created.GroupId;
+  } catch (err) {
+    // describe 有讀寫一致性問題：剛建好的 SG 可能查不到，但 create 會說 duplicate
+    if (!isErrType(err, 'InvalidGroup.Duplicate')) throw err;
+    const again = await find();
+    if (!again) throw err;
+    console.log(`SG 已存在（describe 沒查到，改用 create 例外後重查）: ${name}`);
+    return again.GroupId;
+  }
 }
 
 const taskSg = await ensureSg(`${PROJECT}-task`, 'ECS Fargate task ENI');
@@ -174,19 +184,39 @@ let alb = ((await elb.send(new DescribeLoadBalancersCommand({}))).LoadBalancers 
 if (alb) {
   console.log(`ALB 已存在: ${alb.LoadBalancerArn}`);
 } else {
-  alb = (await elb.send(new CreateLoadBalancerCommand({
-    Name: PROJECT,
-    Type: 'application',
-    Subnets: subnets,
-    Scheme: 'internet-facing',
-  })).LoadBalancers[0]);
+  let created;
+  try {
+    created = await elb.send(new CreateLoadBalancerCommand({
+      Name: PROJECT,
+      Type: 'application',
+      Subnets: subnets,
+      Scheme: 'internet-facing',
+    }));
+  } catch (err) {
+    // ALB 會替帳號建立 service-linked role；若 policy 沒有 iam:CreateServiceLinkedRole 就會被擋
+    if (isErrType(err, 'AccessDenied') && /CreateServiceLinkedRole/.test(err.message || '')) {
+      console.error('ALB 需要 service-linked role AWSServiceRoleForElasticLoadBalancing：');
+      console.error('  A) policy 加 iam:CreateServiceLinkedRole（見 20261105_LucaAWS建構_OpenCode/iam-deploy-policy.json 的 ServiceLinkedRoles statement）');
+      console.error('  B) 或 Console → IAM → Roles → Create service-linked role → Elastic Load Balancing（做過一次後，這條權限就不再需要）');
+    }
+    throw err;
+  }
+  if (!created.LoadBalancers?.length) {
+    // 回應沒有 LoadBalancers 通常是：此區域 ALB 上限、缺 service-linked role
+    // （AWSServiceRoleForElasticLoadBalancing），或 API 回空回應
+    console.error('CreateLoadBalancer 原始回應:', JSON.stringify(created, null, 2));
+    throw new Error('ALB 沒有被建立：回應裡沒有 LoadBalancers');
+  }
+  alb = created.LoadBalancers[0];
 
   let d = alb;
   for (let i = 0; i < 30; i++) {
     d = (await elb.send(new DescribeLoadBalancersCommand({ LoadBalancerArns: [alb.LoadBalancerArn] }))).LoadBalancers;
+    if (!d?.length) { console.log('（describe 回空清單，再等）'); await sleep(5000); continue; }
     if (d[0].State === 'active') break;
     await sleep(5000);
   }
+  if (!d?.length) throw new Error('ALB 建立後 describe 不到，無法继续');
   alb = d[0];
   console.log(`ALB: ${alb.LoadBalancerArn}`);
 }

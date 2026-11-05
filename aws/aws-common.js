@@ -42,9 +42,12 @@ export function newState() {
   return { region: REGION, project: PROJECT, account: ACCOUNT };
 }
 
-// SDK 的異常名稱有時在 err.name、有時在 err.__type（$name），三個都看才算穩
+// SDK 的異常名稱有時在 err.name、有時在 err.__type（$name）、EC2 還在 err.Code，
+// 而且 EC2 的寫法是 InvalidPermission.Duplicate（有句點）。先正規化再比對才會穩。
 export function isErrType(err, type) {
-  return [err.name, err.__type, err.$name].includes(type);
+  const norm = (s) => (s || '').replace(/\./g, '');
+  const want = norm(type);
+  return [err.name, err.__type, err.$name, err.Code, err.code].some((n) => norm(n) === want);
 }
 
 // 印完整 ARN 用的固定前缀（arn:aws:kind:region:account:resource）
