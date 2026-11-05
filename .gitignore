@@ -1,0 +1,17 @@
+# 秘密值不入倉庫（與 LucaWebVercel 相同的習慣）
+.env
+.env.local
+.env.production
+
+node_modules/
+.next/
+
+# OpenCode 設定與 API key
+opencode.json
+
+# log 與暫存
+logs/
+*.log
+
+# AWS 執行期資料（跑過一次 bootstrap 後產生的本地狀態）
+.aws-state/

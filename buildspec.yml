@@ -1,0 +1,45 @@
+# buildspec.yml — 給 AWS CodeBuild 用（另一條「一鍵」路：push 到 GitHub → CodePipeline 自動部署）
+#
+# 需要：
+#   1) CodeBuild project：Linux、aws/codebuild/standard:7.0、啟用 privileged（要跑 docker build）
+#   2) service role 要有 ecr push / ecs register+update 權限（AmazonEC2ContainerServiceFullAccess 或自己的 policy）
+#   3) CodePipeline source = GitHub；build type = BUILD_SPEC；path = LucaAWS/buildspec.yml
+#   4) 把下面三個變數在 CodeBuild 的環境變數裡填成你帳號的实际值（bootstrap.ps1 會把它寫進 .aws-state/config.json）
+version: 0.2
+
+env:
+  variables:
+    AWS_REGION: ap-southeast-2
+    PROJECT: lucaaws
+    ECR_URI: '927678863269.dkr.ecr.ap-southeast-2.amazonaws.com/lucaaws'
+    ECS_CLUSTER: lucaaws
+    ECS_SERVICE: lucaaws
+    EXECUTION_ROLE_ARN: 'arn:aws:iam::927678863269:role/lucaaws-execution'
+    TASK_ROLE_ARN: 'arn:aws:iam::927678863269:role/lucaaws-task'
+
+phases:
+  install:
+    runtime-version:
+      nodejs: 20
+    commands:
+      - npm ci
+  pre_build:
+    commands:
+      - npm run build                       # 產生 .next/standalone（Dockerfile 會複製這份輸出）
+      - aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_URI"
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+  build:
+    commands:
+      - docker build -t "$ECR_URI:$IMAGE_TAG" .
+  post_build:
+    commands:
+      - docker push "$ECR_URI:$IMAGE_TAG"
+      - docker push "$ECR_URI:latest"
+      # JSON 當字串傳給 AWS CLI（CLI v2 接受 structure 參數的 JSON）
+      - CD=$(jq -c '.containerDefinitions[0]' aws/task-definition.json | sed "s|{{IMAGE_URI}}|$ECR_URI:$IMAGE_TAG|")
+      - LOGS=$(jq -c '.logConfiguration' aws/task-definition.json)
+      - aws ecs register-task-definition --family "$PROJECT" --network-mode awsvpc --cpu 1024 --memory 2048 \
+          --requires-compatibilities FARGATE --execution-role-arn "$EXECUTION_ROLE_ARN" --task-role-arn "$TASK_ROLE_ARN" \
+          --log-configuration "$LOGS" --container-definitions "$CD"
+      - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment

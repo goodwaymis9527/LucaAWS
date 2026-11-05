@@ -1,0 +1,23 @@
+{
+  "name": "luca-aws",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:migrate": "node --env-file=.env.local scripts/migrate.js",
+    "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File ./deploy.ps1"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "next": "16.4.5",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

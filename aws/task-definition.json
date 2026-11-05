@@ -1,0 +1,48 @@
+{
+  "family": "lucaaws",
+  "networkMode": "awsvpc",
+  "cpu": "1024",
+  "memory": "2048",
+  "requiresCompatibilities": ["FARGATE"],
+  "platformVersion": "1.0.0",
+  "executionRoleArn": "{{EXECUTION_ROLE_ARN}}",
+  "taskRoleArn": "{{TASK_ROLE_ARN}}",
+  "containerInsights": "disabled",
+  "runtimePlatform": "Linux_x86_64",
+  "logConfiguration": {
+    "logDriver": "awslogs",
+    "options": {
+      "awslogs-group": "/ecs/lucaaws",
+      "awslogs-region": "ap-southeast-2",
+      "awslogs-stream-prefix": "app",
+      "awslogs-create-group": "true"
+    }
+  },
+  "containerDefinitions": [
+    {
+      "name": "lucaaws",
+      "image": "{{IMAGE_URI}}",
+      "portMappings": [
+        { "containerPort": 3000, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "3000" },
+        { "name": "HOSTNAME", "value": "0.0.0.0" },
+        { "name": "APP_ENV", "value": "production" },
+        { "name": "DB_DRIVER", "value": "pg" },
+        { "name": "AWS_REGION", "value": "ap-southeast-2" },
+        { "name": "PG_POOL_MAX", "value": "5" }
+      ],
+      "secrets": [],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"],
+        "interval": 15,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 20
+      },
+      "essential": true
+    }
+  ]
+}
