@@ -262,7 +262,10 @@ console.log(`task definition: ${td.taskDefinitionArn}`);
 console.log('=== 8) ECS cluster + service ===');
 let cluster = ((await ecs.send(new DescribeClustersCommand({ clusters: [PROJECT] }))).clusters || [])[0];
 if (!cluster) {
-  cluster = ((await ecs.send(new CreateClusterCommand({ clusterName: PROJECT }))).clusters || [])[0];
+  const createdCluster = await ecs.send(new CreateClusterCommand({ clusterName: PROJECT }));
+  // CreateCluster / CreateService 回的是單數物件（cluster、service），不是清單；只有 ELB 的 create 才回清單
+  cluster = createdCluster.cluster || (createdCluster.clusters || [])[0];
+  if (!cluster) throw new Error('CreateCluster 回應異常: ' + JSON.stringify(createdCluster));
   console.log(`建立 cluster: ${cluster.clusterName}`);
 }
 
@@ -275,16 +278,23 @@ if (!svc) {
     serviceName: PROJECT,
     taskDefinition: td.taskDefinitionArn,
     launchType: 'FARGATE',
-    platformVersion: '1.0.0',
+    platformVersion: 'LATEST',   // '1.0.0' 會被拒（Fargate 最低 1.1.0；寫死舊版會報 "authorization to access the specified platform"）
     desiredCount: 1,
     networkMode: 'awsvpc',
-    loadBalancers: [{ targetGroupArn: tg.TargetGroupArn }],
+    // TargetType 'ip'（awsvpc）時 loadBalancers 一定要帶 containerName/containerPort，
+    // 否則 ECS 報 "Container Name can not be blank."
+    loadBalancers: [{
+      targetGroupArn: tg.TargetGroupArn,
+      containerName: td.containerDefinitions[0].name,
+      containerPort: 3000,
+    }],
     enableExecuteCommand: true,
     networkConfiguration: {
       awsvpcConfiguration: { subnets, securityGroups: [taskSg], assignPublicIp: 'ENABLED' },
     },
   }));
-  svc = (createdSvc.services || [])[0];
+  svc = createdSvc.service || (createdSvc.services || [])[0];
+  if (!svc) throw new Error('CreateService 回應異常: ' + JSON.stringify(createdSvc));
   console.log(`建立 service: ${svc.serviceName}（SG: ${taskSg}）`);
 }
 

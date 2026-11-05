@@ -4,10 +4,8 @@
   "cpu": "1024",
   "memory": "2048",
   "requiresCompatibilities": ["FARGATE"],
-  "platformVersion": "1.0.0",
   "executionRoleArn": "{{EXECUTION_ROLE_ARN}}",
   "taskRoleArn": "{{TASK_ROLE_ARN}}",
-  "runtimePlatform": "Linux_x86_64",
   "logConfiguration": {
     "logDriver": "awslogs",
     "options": {
