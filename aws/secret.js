@@ -54,7 +54,7 @@ if (!/^postgres(ql)?:\/\//.test(databaseUrl)) {
 
 const host = new URL(databaseUrl).hostname;
 console.log(`將寫入 secret: ${secretName}`);
-console.log(`期望的 ARN: ${arn('secretsmanager', secretName, state.account)}`);
+console.log(`期望的 ARN: ${arn('secretsmanager', 'secret:' + secretName, state.account)}`);
 console.log(`connection string host: ${host}`);   // 只印 host，不印密碼
 
 const existing = ((await sm.send(new ListSecretsCommand({}))).SecretsList || []).find((s) => s.Name === secretName);
