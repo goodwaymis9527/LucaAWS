@@ -27,7 +27,7 @@ import {
   DescribeDBSubnetGroupsCommand,
 } from '@aws-sdk/client-rds';
 
-import { REGION, PROJECT, arn, newState, saveState, whoami } from './aws-common.js';
+import { REGION, PROJECT, arn, isErrType, newState, saveState, whoami } from './aws-common.js';
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -104,7 +104,7 @@ try {
     GroupId: rdsSg, IpProtocol: 'tcp', FromPort: 5432, ToPort: 5432, SourceGroup: taskSg,
   }));
 } catch (err) {
-  if (err.name !== 'InvalidPermissionDuplicate') throw err;
+  if (!isErrType(err, 'InvalidPermissionDuplicate')) throw err;
   console.log('（SG 規則已存在，略過）');
 }
 

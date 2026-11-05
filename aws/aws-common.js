@@ -42,6 +42,11 @@ export function newState() {
   return { region: REGION, project: PROJECT, account: ACCOUNT };
 }
 
+// SDK 的異常名稱有時在 err.name、有時在 err.__type（$name），三個都看才算穩
+export function isErrType(err, type) {
+  return [err.name, err.__type, err.$name].includes(type);
+}
+
 // 印完整 ARN 用的固定前缀（arn:aws:kind:region:account:resource）
 export function arn(kind, resource, account) {
   const acct = account || process.env.LUCAAWS_ACCOUNT || ACCOUNT;

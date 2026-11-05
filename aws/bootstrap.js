@@ -37,7 +37,7 @@ import {
   RegisterTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
 
-import { REGION, PROJECT, buildTaskDefinition, newState, saveState, whoami } from './aws-common.js';
+import { REGION, PROJECT, buildTaskDefinition, isErrType, newState, saveState, whoami } from './aws-common.js';
 
 const clientOpts = { region: REGION };
 const ecr = new ECRClient(clientOpts);
@@ -69,7 +69,14 @@ state.subnets = subnets;
 console.log(`VPC ${vpc.VpcId}  ${vpc.CidrBlock}  subnet 數=${subnets.length}`);
 
 console.log('=== 2) ECR ===');
-let repo = ((await ecr.send(new DescribeRepositoriesCommand({ repositoryNames: [PROJECT] }))).repositories || [])[0];
+// DescribeRepositories 帶 repositoryNames 時，不存在會直接拋 RepositoryNotFoundException（不會回空清單）
+let repo;
+try {
+  repo = ((await ecr.send(new DescribeRepositoriesCommand({ repositoryNames: [PROJECT] }))).repositories || [])[0];
+} catch (err) {
+  if (!isErrType(err, 'RepositoryNotFoundException')) throw err;
+  repo = null;
+}
 if (!repo) {
   repo = ((await ecr.send(new CreateRepositoryCommand({
     repositoryName: PROJECT,
@@ -87,7 +94,7 @@ try {
   await logs.send(new CreateLogGroupCommand({ logGroupName: logGroup }));
   console.log(`建立 log group: ${logGroup}`);
 } catch (err) {
-  if (err.name !== 'ResourceAlreadyExistsException') throw err;
+  if (!isErrType(err, 'ResourceAlreadyExistsException')) throw err;
   console.log('（已存在，略過）');
 }
 
@@ -101,7 +108,7 @@ async function ensureRole(name) {
   try {
     return ((await iam.send(new GetRoleCommand({ RoleName: name }))).Role).Arn;
   } catch (err) {
-    if (err.name !== 'NoSuchEntityException') throw err;
+    if (!isErrType(err, 'NoSuchEntityException')) throw err;
     const role = await iam.send(new CreateRoleCommand({ RoleName: name, AssumeRolePolicyDocument: trust }));
     console.log(`建立 role: ${name}`);
     return role.Role.Arn;
@@ -157,7 +164,7 @@ try {
     GroupId: taskSg, IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, CidrIp: vpc.CidrBlock,
   }));
 } catch (err) {
-  if (err.name !== 'InvalidPermissionDuplicate') throw err;
+  if (!isErrType(err, 'InvalidPermissionDuplicate')) throw err;
   console.log('（SG 規則已存在，略過）');
 }
 state.taskSgId = taskSg;
