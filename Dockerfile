@@ -3,7 +3,8 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+# @aws-sdk/* 是 devDependency（只有 aws/*.js 這幾個部署腳本用到），鏡像內不需要
+RUN npm ci --omit=dev
 
 COPY . .
 RUN npm run build
