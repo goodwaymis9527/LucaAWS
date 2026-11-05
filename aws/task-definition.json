@@ -7,7 +7,6 @@
   "platformVersion": "1.0.0",
   "executionRoleArn": "{{EXECUTION_ROLE_ARN}}",
   "taskRoleArn": "{{TASK_ROLE_ARN}}",
-  "containerInsights": "disabled",
   "runtimePlatform": "Linux_x86_64",
   "logConfiguration": {
     "logDriver": "awslogs",

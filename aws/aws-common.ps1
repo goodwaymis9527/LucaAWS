@@ -62,7 +62,7 @@ function Register-TaskDefinition {
         Write-Host '警告：state 裡沒有 dbSecretArn / databaseUrl，任務啟動時 DATABASE_URL 會缺失'
     }
 
-    # 把 taskRoleArn（ECS execution role 已 attach）與 region 寫進環境，方便 lib/db.js 顯示
+    # RDS 一律要求 SSL；lib/db.js 的 connection string 已含 sslmode=require，這裡只是讓容器內行為一致
     $cd.environment = @($cd.environment + [pscustomobject]@{ name = 'DB_SSLMODE'; value = 'require' })
 
     $cdJson  = ConvertTo-Json -InputObject @($cd) -Depth 10 -Compress
