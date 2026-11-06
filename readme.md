@@ -20,6 +20,8 @@ LucaAWS\
   aws\rds.js            一次性：建 RDS + 兩個 SG（RDS 只放行來自 task SG 的 5432）
   aws\secret.js         把 DATABASE_URL 放 Secrets Manager，dbSecretArn 寫進 config.json
   aws\status.js         看 service / task / 最近日誌（不需要 CLI）
+  aws\netcheck.js       網路資料面診斷：SG 規則、NACL、路由表關聯、ALB ENI 的 public IP
+  aws\exec.js           在跑著的 Fargate 任務內下一條指令（ECS Exec，需要 ssm:SendCommand）
   aws\task-definition.json  Fargate 模板（欄位直接對應 RegisterTaskDefinitionCommand）
   bootstrap.ps1         （替代版，需要 AWS CLI）只跑一次，把 AWS 資源建起來
   deploy.ps1            （需要 AWS CLI）一鍵部署
@@ -146,3 +148,23 @@ node scripts/migrate.js
   （`gitGithubPush.bat` 則相反：它需要 CRLF，靠 `chcp 65001` 顯示中文）。
 - 這版 SDK 的 `@aws-sdk/client-ecs` 沒有 `DescribeEventsCommand`（ECS events 在 v3 這版被拿掉），所以 `aws/status.js` 改讀 CloudWatch Logs 的最近幾行。
 - SDK 需要 Node ≥22 才會繼續收到更新（現在本機是 Node 20.20，仍可跑，只是有 NodeVersionSupportWarning）。
+
+## 現況（2026-11-06 已上線）
+
+正式網址（ALB DNS）：`http://lucaaws-1931802006.ap-southeast-2.elb.amazonaws.com/`
+
+```powershell
+node aws/status.js            # service、ALB SG、task health、最近日誌
+node aws/netcheck.js          # SG / NACL / 路由 / ALB ENI
+node aws/exec.js "<在容器內跑的指令>"   # 需要 ecs:ExecuteCommand + ssm:SendCommand
+```
+
+- 實測：`/api/health` 回 200 且 `ok:true`；`/api/items` 回 200（7 筆）。
+- 資料庫目前走 **Neon**（`DB_DRIVER=pg` + Neon 的 pooler endpoint），不是 RDS：本機 5432 被封但任務在 VPC 內可出去，
+  而本機測 Neon 時走 443。task definition 的 `DB_SSLMODE=require`（pg v9 語義變更，要鎖行為就明確寫 `verify-full`）。
+- 跑著的 task definition 是 **`lucaaws:11`**（`logConfiguration` 移到 container definition 後才會有 CloudWatch stream；
+  舊的 revision 8/10 沒有 log driver，所以 log group 存在但完全沒有 stream）。
+- 本次上線的卡點是 **ALB 的 SG**：ALB 建立時沒指定 SG → 套用 VPC default SG（只有 self-reference），
+  外部打 80 被丟包而 target health 仍 healthy。既有 ALB 的 SG 不能改（只能重建），所以把 80 補開在現用 SG 上；
+  bootstrap 已改為新建 `lucaaws-alb` SG 並在 `CreateLoadBalancer` 時指定。
+- 只改 task definition（不含鏡像變動）時：`node aws/deploy.js --skip-build --skip-push`，沿用 `state.lastImage`。

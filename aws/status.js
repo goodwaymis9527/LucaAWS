@@ -16,8 +16,8 @@ import {
   DescribeLogStreamsCommand,
   GetLogEventsCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
-import { EC2Client, DescribeInternetGatewaysCommand, DescribeRouteTablesCommand } from '@aws-sdk/client-ec2';
-import { ElasticLoadBalancingV2Client, DescribeTargetHealthCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
+import { EC2Client, DescribeInternetGatewaysCommand, DescribeRouteTablesCommand, DescribeSecurityGroupsCommand } from '@aws-sdk/client-ec2';
+import { ElasticLoadBalancingV2Client, DescribeTargetHealthCommand, DescribeLoadBalancersCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { REGION, PROJECT, ACCOUNT, readState, whoami } from './aws-common.js';
 
 const argv = process.argv.slice(2);
@@ -62,7 +62,9 @@ for (let i = 0; i < 4; i++) {
     services: [state.service],
     maxResults: 10,
   }));
-  taskArns = listed.tasks || [];
+  // 新版 SDK 的 ListTasks 回的是 taskArns（不是舊版的 tasks）：只讀 tasks 會永遠得到空清單，
+  // 而 service 的 runningCount 明明是 1，容易被誤判成「沒有任務」
+  taskArns = listed.taskArns || listed.tasks || [];
   if (taskArns.length) break;
   // ListTasks 偶爾會比 runningCount 慢一拍（最終一致性），running>0 時重試幾次
   if (!svc.runningCount) break;
@@ -87,7 +89,8 @@ const ec2 = new EC2Client({ region });
 const elb = new ElasticLoadBalancingV2Client({ region });
 try {
   const igws = (await ec2.send(new DescribeInternetGatewaysCommand({}))).InternetGateways || [];
-  const igw = igws.find((g) => (g.Attachment || []).some((a) => a.VpcId === state.vpcId));
+  // API 回的是 Attachments（複數），不是 Attachment（單數）：寫錯會永遠顯示「沒有 attach」
+  const igw = igws.find((g) => (g.Attachments || []).some((a) => a.VpcId === state.vpcId));
   console.log(`IGW            : ${igw ? igw.InternetGatewayId + '（已 attach）' : '（VPC 沒有 attach IGW → 外部連不進來，task 也連不出去）'}`);
   const tables = (await ec2.send(new DescribeRouteTablesCommand({ Filters: [{ Name: 'vpc-id', Values: [state.vpcId] }] }))).RouteTables || [];
   const table = tables.find((t) => t.Default) || tables[0];
@@ -95,6 +98,27 @@ try {
   console.log(`route table    : ${table?.RouteTableId || '?'}  0.0.0.0/0 → ${route?.GatewayId || '（沒有預設路由）'}`);
 } catch (err) {
   console.log(`網路檢查 skipped : ${(err.__type || err.name)}（需要 ec2:DescribeInternetGateways / DescribeRouteTables）`);
+}
+
+// ALB 的 SG：ALB 沒有指定 SG 時 AWS 會套用 VPC 的 default SG，而 default SG 只有 self-reference。
+// 那種情況下外部 client 打 80 會被丟包（TCP timeout），但 ALB 打 target 的 health check 依然 healthy
+// → 看起來「控制面全綠、資料面不通」。這一節就是用來戳破這個假象。
+try {
+  const lb = (await elb.send(new DescribeLoadBalancersCommand({}))).LoadBalancers || [];
+  const sgs = (await ec2.send(new DescribeSecurityGroupsCommand({ Filters: [{ Name: 'vpc-id', Values: [state.vpcId] }] }))).SecurityGroups || [];
+  const sgIds = lb[0]?.SecurityGroups || [];
+  console.log('');
+  console.log('=== ALB SG（外部 ingress）===');
+  for (const id of sgIds) {
+    const g = sgs.find((x) => x.GroupId === id);
+    // 受管規則在 IpPermissions（authorize 寫的就是這裡），不是 Permissions
+    const open80 = (g?.IpPermissions || []).filter((p) => p.IpProtocol === 'tcp' && p.FromPort === 80);
+    const src = open80.map((p) => (p.Ipv4Ranges || p.IpRanges || []).map((r) => r.CidrBlock || r.CidrIp).join(',')
+      || (p.UserIdGroupPairs || p.SecurityGroups || []).map((x) => x.GroupId).join(','));
+    console.log(`  ${id} ${g?.GroupName || '?'}  80 ← ${src.length ? src.join(' | ') : '（無規則：外部連不進來，但 target health 仍會顯示 healthy）'}`);
+  }
+} catch (err) {
+  console.log(`ALB SG skipped  : ${(err.__type || err.name)}（需要 ec2:DescribeSecurityGroups）`);
 }
 
 if (state.targetGroupArn) {

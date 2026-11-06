@@ -6,6 +6,8 @@
 // 執行：
 //   node aws/deploy.js
 //   node aws/deploy.js --skip-build
+//   node aws/deploy.js --skip-build --skip-push   ← 只改 task definition（例如 logConfiguration、環境變數）
+//                                                  時用：沿用最後一次 push 的镜像，不重跑 docker
 //   node aws/deploy.js --tag=dev
 
 import { spawnSync } from 'node:child_process';
@@ -15,7 +17,9 @@ import { ECSClient, RegisterTaskDefinitionCommand, UpdateServiceCommand } from '
 
 const argv = process.argv.slice(2);
 const skipBuild = argv.includes('--skip-build');
+const skipPush = argv.includes('--skip-push');
 const tag = (argv.find((a) => a.startsWith('--tag=')) || '').split('=')[1] || 'latest';
+const imageArg = (argv.find((a) => a.startsWith('--image=')) || '').split('=')[1];
 
 const state = readState();
 if (!state.ecrUri) throw new Error('config.json 缺少 ecrUri；先跑 aws/bootstrap.js');
@@ -47,40 +51,48 @@ if (skipBuild) {
   run('npm', ['run', 'build'], true);
 }
 
-// 2) docker build（Dockerfile 用 multi-stage，runtime 只有 standalone 輸出）
-console.log('=== 2) docker build ===');
-run('docker', ['build', '-t', `${state.project}:${tag}`, '.']);
+// 2) 只改 task definition（例如 logConfiguration）時可用 --skip-push：不重跑 docker，沿用已 push 過的镜像
+let imageRef;
+if (skipPush) {
+  imageRef = imageArg || state.lastImage || `${state.ecrUri}:${tag}`;
+  console.log(`=== 2) 跳過 docker build/push，沿用既有镜像：${imageRef} ===`);
+} else {
+  console.log('=== 2) docker build ===');
+  run('docker', ['build', '-t', `${state.project}:${tag}`, '.']);
 
-// 3) ECR login + push
-console.log('=== 3) push 到 ECR ===');
-const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-const registryHost = state.ecrUri.split('/')[0];
+  // 3) ECR login + push
+  console.log('=== 3) push 到 ECR ===');
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const registryHost = state.ecrUri.split('/')[0];
 
-const auth = await ecr.send(new GetAuthorizationTokenCommand({}));
-const rawToken = auth.authorizationData?.[0]?.authorizationToken;
-if (!rawToken) throw new Error('拿不到 ECR authorizationToken（檢查憑據與 ecr:GetAuthorizationToken 權限）');
+  const auth = await ecr.send(new GetAuthorizationTokenCommand({}));
+  const rawToken = auth.authorizationData?.[0]?.authorizationToken;
+  if (!rawToken) throw new Error('拿不到 ECR authorizationToken（檢查憑據與 ecr:GetAuthorizationToken 權限）');
 
-// SDK 回的是 base64 的 "AWS:<password>"；--password-stdin 要的是解碼後的 password 本體
-const decoded = Buffer.from(rawToken, 'base64').toString('utf8');
-const password = decoded.startsWith('AWS:') ? decoded.slice(4) : decoded;
+  // SDK 回的是 base64 的 "AWS:<password>"；--password-stdin 要的是解碼後的 password 本體
+  const decoded = Buffer.from(rawToken, 'base64').toString('utf8');
+  const password = decoded.startsWith('AWS:') ? decoded.slice(4) : decoded;
 
-const login = spawnSync('docker', ['login', '--username', 'AWS', '--password-stdin', registryHost], {
-  input: password,
-});
-if (login.status !== 0) throw new Error('docker login 失敗：' + (login.stderr?.toString() || ''));
+  const login = spawnSync('docker', ['login', '--username', 'AWS', '--password-stdin', registryHost], {
+    input: password,
+  });
+  if (login.status !== 0) throw new Error('docker login 失敗：' + (login.stderr?.toString() || ''));
 
-run('docker', ['tag', `${state.project}:${tag}`, `${state.ecrUri}:${tag}`]);
-run('docker', ['tag', `${state.project}:${tag}`, `${state.ecrUri}:${stamp}`]);
-run('docker', ['push', `${state.ecrUri}:${tag}`]);
-run('docker', ['push', `${state.ecrUri}:${stamp}`]);
+  run('docker', ['tag', `${state.project}:${tag}`, `${state.ecrUri}:${tag}`]);
+  run('docker', ['tag', `${state.project}:${tag}`, `${state.ecrUri}:${stamp}`]);
+  run('docker', ['push', `${state.ecrUri}:${tag}`]);
+  run('docker', ['push', `${state.ecrUri}:${stamp}`]);
 
-// 4) 新的 task definition revision（image 指到這次 push 的镜像）
+  imageRef = `${state.ecrUri}:${stamp}`;
+}
+
+// 4) 新的 task definition revision（image 指到這次的镜像）
 console.log('=== 4) register task definition revision ===');
-const tdInput = buildTaskDefinition(state, `${state.ecrUri}:${stamp}`);
+const tdInput = buildTaskDefinition(state, imageRef);
 const out = await ecs.send(new RegisterTaskDefinitionCommand(tdInput));
 state.taskFamily = out.taskDefinition.family;
 state.taskRevision = out.taskDefinition.revision;
-state.lastImage = `${state.ecrUri}:${stamp}`;
+state.lastImage = imageRef;
 
 // 5) service 用新 revision 並強制換任務（rolling：新任務 healthy 後才停舊任務）
 console.log('=== 5) update service ===');

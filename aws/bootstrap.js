@@ -77,11 +77,21 @@ console.log(`VPC ${vpc.VpcId}  ${vpc.CidrBlock}  subnet 數=${subnets.length}`);
 // 外部連不進 ALB，task 也連不出去 Neon（Neon 在 AWS 之外，一定要走 IGW）。
 async function ensureInternetRoute() {
   const igws = (await ec2.send(new DescribeInternetGatewaysCommand({}))).InternetGateways || [];
-  let igw = igws.find((g) => (g.Attachment || []).some((a) => a.VpcId === vpc.VpcId));
+  // DescribeInternetGateways 回的是 Attachments（複數陣列），不是舊版的 Attachment；寫錯會永遠查不到 attach
+  let igw = igws.find((g) => (g.Attachments || []).some((a) => a.VpcId === vpc.VpcId));
   if (!igw) {
     igw = igws[0] || (await ec2.send(new CreateInternetGatewayCommand({}))).InternetGateway;
-    await ec2.send(new AttachInternetGatewayCommand({ InternetGatewayId: igw.InternetGatewayId, VpcId: vpc.VpcId }));
-    console.log(`attach IGW: ${igw.InternetGatewayId} → ${vpc.VpcId}`);
+    try {
+      await ec2.send(new AttachInternetGatewayCommand({ InternetGatewayId: igw.InternetGatewayId, VpcId: vpc.VpcId }));
+      console.log(`attach IGW: ${igw.InternetGatewayId} → ${vpc.VpcId}`);
+    } catch (e) {
+      // describe 可能比實際狀態慢一拍（或在控制台已經 attach 過）：duplicate 視為成功
+      if (isErrType(e, 'ResourceAlreadyAssociated')) {
+        console.log(`IGW ${igw.InternetGatewayId} 已 attach（duplicate 例外，視為成功）`);
+      } else {
+        throw e;
+      }
+    }
   } else {
     console.log(`IGW ${igw.InternetGatewayId} 已 attach 到 ${vpc.VpcId}`);
   }
@@ -93,8 +103,17 @@ async function ensureInternetRoute() {
   if ((table.Routes || []).some((r) => r.GatewayId === igwId)) {
     console.log(`route table ${table.RouteTableId} 已有 0.0.0.0/0 → ${igwId}`);
   } else {
-    await ec2.send(new CreateRouteCommand({ RouteTableId: table.RouteTableId, DestinationCidrBlock: '0.0.0.0/0', GatewayId: igwId }));
-    console.log(`route table ${table.RouteTableId} 加上 0.0.0.0/0 → ${igwId}`);
+    try {
+      await ec2.send(new CreateRouteCommand({ RouteTableId: table.RouteTableId, DestinationCidrBlock: '0.0.0.0/0', GatewayId: igwId }));
+      console.log(`route table ${table.RouteTableId} 加上 0.0.0.0/0 → ${igwId}`);
+    } catch (e) {
+      // 同樣的「先 describe 再 create」讀寫一致性問題：existing 視為成功
+      if (isErrType(e, 'RouteAlreadyExists')) {
+        console.log(`route table ${table.RouteTableId} 已有 0.0.0.0/0（duplicate 例外，視為成功）`);
+      } else {
+        throw e;
+      }
+    }
   }
   state.igwId = igwId;
   state.routeTableId = table.RouteTableId;
@@ -199,7 +218,7 @@ const appPolicy = JSON.stringify({
 });
 await iam.send(new PutRolePolicyCommand({ RoleName: taskRoleName, PolicyName: `${PROJECT}-app`, PolicyDocument: appPolicy }));
 
-console.log('=== 5) task security group（RDS 的 5432 會指到這個 SG）===');
+console.log('=== 5) security groups（task SG + ALB SG）===');
 async function ensureSg(name, description) {
   const find = async () => ((await ec2.send(new DescribeSecurityGroupsCommand({
     Filters: [{ Name: 'vpc-id', Values: [vpc.VpcId] }, { Name: 'group-name', Values: [name] }],
@@ -220,24 +239,39 @@ async function ensureSg(name, description) {
   }
 }
 
-const taskSg = await ensureSg(`${PROJECT}-task`, 'ECS Fargate task ENI');
-try {
-  await ec2.send(new AuthorizeSecurityGroupIngressCommand({
-    GroupId: taskSg, IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, SourceGroup: taskSg,
-  }));
-  await ec2.send(new AuthorizeSecurityGroupIngressCommand({
-    GroupId: taskSg, IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, CidrIp: vpc.CidrBlock,
-  }));
-} catch (err) {
-  if (!isErrType(err, 'InvalidPermissionDuplicate')) throw err;
-  console.log('（SG 規則已存在，略過）');
+async function authorize(GroupId, port, source) {
+  try {
+    await ec2.send(new AuthorizeSecurityGroupIngressCommand({
+      GroupId, IpProtocol: 'tcp', FromPort: port, ToPort: port, ...source,
+    }));
+    console.log(`  ingress ${port} ← ${source.SourceGroup || source.CidrIp}（寫入 ${GroupId}）`);
+  } catch (err) {
+    if (!isErrType(err, 'InvalidPermissionDuplicate')) throw err;
+    console.log(`  ingress ${port}（規則已存在，略過）`);
+  }
 }
+
+const taskSg = await ensureSg(`${PROJECT}-task`, 'ECS Fargate task ENI');
+await authorize(taskSg, 3000, { SourceGroup: taskSg });
+await authorize(taskSg, 3000, { CidrIp: vpc.CidrBlock });   // ALB 的 health check 來源就是 VPC 內
 state.taskSgId = taskSg;
+
+// ALB 如果沒有指定 SG，AWS 會直接套用 VPC 的 default SG；default SG 只有 self-reference，
+// 外部client 打 80 會被丟包（TCP timeout），但 ALB 打到 task 的 health check 仍然 healthy
+// → 表現為「控制面全綠、資料面不通」。所以 ALB 一定要有属于自己的 SG 並放行 0.0.0.0/0
+const albSg = await ensureSg(`${PROJECT}-alb`, 'ALB public ingress');
+await authorize(albSg, 80, { CidrIp: '0.0.0.0/0' });
+state.albSgId = albSg;
 
 console.log('=== 6) ALB + target group + listener ===');
 let alb = ((await elb.send(new DescribeLoadBalancersCommand({}))).LoadBalancers || []).find((l) => l.LoadBalancerName === PROJECT);
 if (alb) {
   console.log(`ALB 已存在: ${alb.LoadBalancerArn}`);
+  // ALB 的 SG 在建立後不能改（只能重建）。已經跑著的 ALB 若是 default SG，就把 80 補開放在它目前的 SG 上
+  if (!(alb.SecurityGroups || []).includes(albSg)) {
+    console.log(`  注意：既有 ALB 用的 SG 是 ${(alb.SecurityGroups || []).join(',')}（ALB 的 SG 建立後不能改，只能重建）`);
+    for (const sgId of alb.SecurityGroups || []) await authorize(sgId, 80, { CidrIp: '0.0.0.0/0' });
+  }
 } else {
   let created;
   try {
@@ -246,6 +280,7 @@ if (alb) {
       Type: 'application',
       Subnets: subnets,
       Scheme: 'internet-facing',
+      SecurityGroups: [albSg],
     }));
   } catch (err) {
     // ALB 會替帳號建立 service-linked role；若 policy 沒有 iam:CreateServiceLinkedRole 就會被擋

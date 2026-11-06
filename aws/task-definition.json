@@ -6,15 +6,6 @@
   "requiresCompatibilities": ["FARGATE"],
   "executionRoleArn": "{{EXECUTION_ROLE_ARN}}",
   "taskRoleArn": "{{TASK_ROLE_ARN}}",
-  "logConfiguration": {
-    "logDriver": "awslogs",
-    "options": {
-      "awslogs-group": "/ecs/lucaaws",
-      "awslogs-region": "ap-southeast-2",
-      "awslogs-stream-prefix": "app",
-      "awslogs-create-group": "true"
-    }
-  },
   "containerDefinitions": [
     {
       "name": "lucaaws",
@@ -38,6 +29,15 @@
         "timeout": 5,
         "retries": 3,
         "startPeriod": 20
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/lucaaws",
+          "awslogs-region": "ap-southeast-2",
+          "awslogs-stream-prefix": "app",
+          "awslogs-create-group": "true"
+        }
       },
       "essential": true
     }
