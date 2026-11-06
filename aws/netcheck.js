@@ -64,7 +64,10 @@ await safe('ec2:DescribeRouteTables', async () => {
 });
 
 await safe('elasticloadbalancing:DescribeLoadBalancers', async () => {
-  const res = await alb.send(new DescribeLoadBalancersCommand({}));
+  // 有 state.albArn 就只查這一把；否則退回整清單（账号内多把 ALB 時不好對應）
+  const res = await alb.send(new DescribeLoadBalancersCommand(
+    state.albArn ? { LoadBalancerArns: [state.albArn] } : {}
+  ));
   for (const b of res.LoadBalancers || []) {
     console.log(`ALB: ${b.LoadBalancerName} ${b.Scheme} ${b.DNSName} sg=${JSON.stringify(b.SecurityGroups)}`);
     const zones = (b.AvailabilityZones || []).map((z) => ({ zone: z.ZoneName, subnet: z.SubnetId, addresses: z.LoadBalancerAddresses }));

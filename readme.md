@@ -168,3 +168,7 @@ node aws/exec.js "<在容器內跑的指令>"   # 需要 ecs:ExecuteCommand + ss
   外部打 80 被丟包而 target health 仍 healthy。既有 ALB 的 SG 不能改（只能重建），所以把 80 補開在現用 SG 上；
   bootstrap 已改為新建 `lucaaws-alb` SG 並在 `CreateLoadBalancer` 時指定。
 - 只改 task definition（不含鏡像變動）時：`node aws/deploy.js --skip-build --skip-push`，沿用 `state.lastImage`。
+- **本節是快照**：實際跑著的 revision 以 `node aws/status.js` 或 `config.json` 的 `taskRevision` 為準
+  （2026-11-06 導向修正那次部署後是 **`lucaaws:12`**，鏡像 `lucaaws:20261106034113`）。
+- `status.js` / `netcheck.js` 的 ALB 節改用 `config.json` 的 `albArn`（`LoadBalancerArns`），不會再誤讀帳號內別的 ALB；
+  `buildspec.yml` 的 jq 也改成從 `.containerDefinitions[0].logConfiguration` 取（與 `aws/*.js` 一致）。

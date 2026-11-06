@@ -38,7 +38,10 @@ phases:
       - docker push "$ECR_URI:latest"
       # JSON 當字串傳給 AWS CLI（CLI v2 接受 structure 參數的 JSON）
       - CD=$(jq -c '.containerDefinitions[0]' aws/task-definition.json | sed "s|{{IMAGE_URI}}|$ECR_URI:$IMAGE_TAG|")
-      - LOGS=$(jq -c '.logConfiguration' aws/task-definition.json)
+      # logConfiguration 屬 container definition（不是頂層欄位）：jq 要從 .containerDefinitions[0] 取，
+      # 否則 --log-configuration 會拿到空值（與 aws/*.js 的讀法不一致）。CD 本身已含 logConfiguration，
+      # 這裡只是把同一份值另外傳一次，兩者必須一致。
+      - LOGS=$(jq -c '.containerDefinitions[0].logConfiguration' aws/task-definition.json)
       - aws ecs register-task-definition --family "$PROJECT" --network-mode awsvpc --cpu 1024 --memory 2048 \
           --requires-compatibilities FARGATE --execution-role-arn "$EXECUTION_ROLE_ARN" --task-role-arn "$TASK_ROLE_ARN" \
           --log-configuration "$LOGS" --container-definitions "$CD"

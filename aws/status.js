@@ -104,11 +104,16 @@ try {
 // 那種情況下外部 client 打 80 會被丟包（TCP timeout），但 ALB 打 target 的 health check 依然 healthy
 // → 看起來「控制面全綠、資料面不通」。這一節就是用來戳破這個假象。
 try {
-  const lb = (await elb.send(new DescribeLoadBalancersCommand({}))).LoadBalancers || [];
+  // 用 state.albArn 鎖定「我們這把」ALB；帳號內有多把 ALB 時，無 Filter 的 describe 會回整清單，
+  // 取 lb[0] 可能讀到別的 ALB（SG 就印錯）
+  const lb = state.albArn
+    ? (await elb.send(new DescribeLoadBalancersCommand({ LoadBalancerArns: [state.albArn] }))).LoadBalancers || []
+    : (await elb.send(new DescribeLoadBalancersCommand({}))).LoadBalancers || [];
   const sgs = (await ec2.send(new DescribeSecurityGroupsCommand({ Filters: [{ Name: 'vpc-id', Values: [state.vpcId] }] }))).SecurityGroups || [];
   const sgIds = lb[0]?.SecurityGroups || [];
   console.log('');
   console.log('=== ALB SG（外部 ingress）===');
+  console.log(`  ALB: ${lb[0]?.LoadBalancerName || '?'}${state.albArn ? `（${state.albArn}）` : '（state.albArn 缺失：可能讀到別的 ALB）'}`);
   for (const id of sgIds) {
     const g = sgs.find((x) => x.GroupId === id);
     // 受管規則在 IpPermissions（authorize 寫的就是這裡），不是 Permissions
